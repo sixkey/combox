@@ -1,0 +1,10 @@
+*
+!.gitignore
+
+!**.cpp
+!**.hpp
+
+!src
+!inc
+
+!**/CMakeLists.txt
