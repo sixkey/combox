@@ -18,18 +18,21 @@
 
 using sat_solver = CaDiCaL::Solver;
 
-//template < typename var_t >
-//std::string to_string( var_to_id_t< var_t > var_to_id )
-//{
-    //std::stringstream ss;
-    //ss << "{\n";
-    //for ( auto it = var_to_id.left.begin(); it != var_to_id.left.end(); it++ )
-    //{
-        //ss << "\t" << it->first << ": " << it->second << ",\n";
-    //}
-    //ss << "}\n";
-    //return ss.str();
-//}
+namespace kck
+{
+
+template < typename var_t >
+std::string to_string( var_to_id_t< var_t > var_to_id )
+{
+    std::stringstream ss;
+    ss << "{\n";
+    for ( auto it = var_to_id.left.begin(); it != var_to_id.left.end(); it++ )
+    {
+      //ss << "\t" << it->first << ": " << it->second << ",\n";
+    }
+    ss << "}\n";
+    return ss.str();
+}
 
 template < typename var_t > 
 struct sat_res 
@@ -64,11 +67,13 @@ struct sat_res
     }
 };
 
-
-void add_cnf( std::shared_ptr< sat_solver > solver, cnf_t cnf );
+void add_cnf( std::shared_ptr< sat_solver > solver, sat_cnf_t cnf );
 
 template < typename var_t >
-sat_res< var_t > sat_solve( form_ptr< var_t > formula )
+void add_cnf( std::shared_ptr< sat_solver > solver, cnf_t< var_t > cnf );
+
+template < typename var_t >
+sat_res< var_t > sat_solve( formula_ptr< var_t > formula )
 {
     auto [ cnf, mapping ] = formula->to_cnf();
 
@@ -79,7 +84,7 @@ sat_res< var_t > sat_solve( form_ptr< var_t > formula )
     return sat_res< var_t >{ res, solver, std::move( mapping ) };
 }
 
-template < typename var_t >
+template < typename cnf_t >
 std::pair< int, std::shared_ptr< sat_solver > > sat_solve( cnf_t cnf )
 {
     auto solver = std::make_shared< sat_solver >();
@@ -102,9 +107,4 @@ void add_cnf( std::shared_ptr< sat_solver > solver
     }
 }
 
-template < typename var_t >
-void add_cnf( std::shared_ptr< sat_solver > solver 
-            , const cnf_comp_mask< var_t > &cnf )
-{
-    add_cnf( solver, cnf, cnf.mask );    
 }
