@@ -1,4 +1,6 @@
-#include "sat.hpp"
+
+
+#include "kck_sat.hpp"
 
 void add_cnf( std::shared_ptr< sat_solver > solver, cnf_t cnf )
 {

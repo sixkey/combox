@@ -1,11 +1,16 @@
-#include "../inc/cadical.hpp"
+#pragma once
+
 #include <optional>
 #include <map>
-#include "to_cnf.hpp"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <boost/dynamic_bitset.hpp>
+
+#include "../inc/cadical.hpp"
 #define cdcl CaDiCaL
+
+#include "kck_form.hpp"
 
 #define SAT_U 0
 #define SAT_Y 10
@@ -13,18 +18,18 @@
 
 using sat_solver = CaDiCaL::Solver;
 
-template < typename var_t >
-std::string to_string( var_to_id_t< var_t > var_to_id )
-{
-    std::stringstream ss;
-    ss << "{\n";
-    for ( auto it = var_to_id.left.begin(); it != var_to_id.left.end(); it++ )
-    {
-        ss << "\t" << it->first << ": " << it->second << ",\n";
-    }
-    ss << "}\n";
-    return ss.str();
-}
+//template < typename var_t >
+//std::string to_string( var_to_id_t< var_t > var_to_id )
+//{
+    //std::stringstream ss;
+    //ss << "{\n";
+    //for ( auto it = var_to_id.left.begin(); it != var_to_id.left.end(); it++ )
+    //{
+        //ss << "\t" << it->first << ": " << it->second << ",\n";
+    //}
+    //ss << "}\n";
+    //return ss.str();
+//}
 
 template < typename var_t > 
 struct sat_res 
@@ -83,3 +88,23 @@ std::pair< int, std::shared_ptr< sat_solver > > sat_solve( cnf_t cnf )
     return { res, solver };
 }
 
+template < typename var_t >
+void add_cnf( std::shared_ptr< sat_solver > solver 
+            , const cnf_comp< var_t > &cnf
+            , const boost::dynamic_bitset<> &mask )
+{
+    assert( mask.size() == cnf.size() );
+    for( int i = 0; i < mask.size(); i++ ) {
+        if ( ! mask[ i ] ) continue;
+        for( auto v : cnf.cnf[ i ] )
+            solver->add( v );
+        solver->add( 0 );
+    }
+}
+
+template < typename var_t >
+void add_cnf( std::shared_ptr< sat_solver > solver 
+            , const cnf_comp_mask< var_t > &cnf )
+{
+    add_cnf( solver, cnf, cnf.mask );    
+}
