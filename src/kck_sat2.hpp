@@ -13,8 +13,8 @@ using sat_solver_t = CaDiCaL::Solver;
 
 namespace kck {
 
-void add_cnf( sat_solver_t& sat_solver, cnf_t< int > &cnf );
+void add_cnf( sat_solver_t& sat_solver, cnf_t< int > cnf );
 
-void add_cnf( sat_solver_t& sat_solver, cnf_tree_t< int > &cnf_tree );
+void add_cnf( sat_solver_t& sat_solver, cnf_tree_t< int > cnf_tree );
 
 }

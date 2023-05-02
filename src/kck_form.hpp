@@ -11,48 +11,57 @@
 
 namespace kck {
 
-template < typename var_t >
-using labeler_t = var_t (*)( int );
+template < typename lit_t >
+using labeler_t = lit_t (*)( int );
 
-template < typename var_t >
+template < typename lit_t >
 struct cnf_builder
 {
-    cnf_t< var_t > output;
-    labeler_t< var_t > labeler;
+    using var_t = typename lit_t::var_t;
+
+    cnf_t< lit_t > output;
+    labeler_t< lit_t > labeler;
     int label_counter = 0;
 
-    cnf_builder( labeler_t< var_t > labeler ) 
+    cnf_builder( labeler_t< lit_t > labeler ) 
     {
         this->labeler = labeler;
     }
 
     int get_node_id() { return label_counter++; }
 
-    var_t get_help_var() { return labeler( get_node_id() ); }
+    // Gives a positive literal
+    lit_t get_help_lit() { return labeler( get_node_id() ); }
 
-    void push( cnf_clause_t< var_t > clause )
+    void push( cnf_clause_t< lit_t > clause )
     {
         output.push_back( clause );
     }
 
-    void push( var_t v ) 
+    void push( lit_t v ) 
     {
         output.push_back( { v } );
     }
 };
 
-template < typename var_t >
+template < typename lit_t >
 struct formula
 {
-    virtual lit_t< var_t > to_cnf_go( cnf_builder< var_t >& builder ) = 0;
+    using var_t = typename lit_t::var_t;
+    virtual lit_t to_cnf_go( cnf_builder< lit_t >& builder ) = 0;
     virtual std::ostream &to_string_go( std::ostream &ss, int level ) = 0;
 
-    cnf_t< var_t > to_cnf( labeler_t< var_t > labeler )
+    cnf_t< lit_t > to_cnf( cnf_builder< lit_t > &builder )
     {
-        cnf_builder< var_t > builder( labeler );
         auto top_lit = this->to_cnf_go( builder );
         builder.push( { top_lit } );
         return builder.output;
+    }
+
+    cnf_t< lit_t > to_cnf( labeler_t< lit_t > labeler )
+    {
+        cnf_builder< lit_t > builder( labeler );
+        return to_cnf( builder );
     }
 
     std::string to_string() 
@@ -63,28 +72,29 @@ struct formula
     }
 };
 
-template < typename var_t > 
-using formula_ptr = std::shared_ptr< formula< var_t > >;
+template < typename lit_t > 
+using formula_ptr = std::shared_ptr< formula< lit_t > >;
 
 std::ostream& str_indent( std::ostream& ss, int level );
 
 //// Not ////
 
-template < typename var_t >
-struct node_not : public formula< var_t > 
+template < typename lit_t >
+struct node_not : public formula< lit_t > 
 {
-    formula_ptr< var_t > child;
+    using var_t = typename lit_t::var_t;
+    formula_ptr< lit_t > child;
 
-    node_not( formula_ptr< var_t > child ) 
+    node_not( formula_ptr< lit_t > child ) 
         : child( child ){};
 
-    lit_t< var_t > to_cnf_go( cnf_builder< var_t >& builder ) override 
+    lit_t to_cnf_go( cnf_builder< var_t >& builder ) override 
     {
-        var_t node_var = builder.get_help_var();
-        lit_t< var_t > child_lit = child->to_cnf_go( builder );
-        builder.push( { { node_var, false }, -child_lit } );
-        builder.push( { { node_var, true  }, +child_lit } );
-        return { node_var, true };
+        lit_t node_lit = builder.get_help_lit();
+        lit_t child_lit = child->to_cnf_go( builder );
+        builder.push( { -node_lit, -child_lit } );
+        builder.push( {  node_lit, +child_lit } );
+        return node_lit;
     }
 
     int to_string_go( std::ostream &ss, int level ) override 
@@ -94,25 +104,25 @@ struct node_not : public formula< var_t >
     }
 };
 
-template < typename var_t >
-formula_ptr< var_t > make_not( formula_ptr< var_t > child )
+template < typename lit_t >
+formula_ptr< lit_t > make_not( formula_ptr< lit_t > child )
 {
     return std::make_shared< node_not >( child );
 }
 
 
-template < typename var_t >
-struct nnary_node : formula< var_t >
+template < typename lit_t >
+struct nnary_node : formula< lit_t >
 {
-    std::vector< formula_ptr< var_t > > children;
+    std::vector< formula_ptr< lit_t > > children;
 
-    nnary_node( std::vector< formula_ptr< var_t > > children ) 
+    nnary_node( std::vector< formula_ptr< lit_t > > children ) 
         : children( std::move( children ) ){};
 
     protected: 
-    std::vector< lit_t< var_t > > export_children( cnf_builder< var_t >& builder )
+    std::vector< lit_t > export_children( cnf_builder< lit_t >& builder )
     {
-        std::vector< lit_t< var_t > > children_ids;
+        std::vector< lit_t > children_ids;
         for ( auto &c : children ) 
             children_ids.push_back( c->to_cnf_go( builder ) );
         return std::move( children_ids );
@@ -126,7 +136,7 @@ struct nnary_node : formula< var_t >
     }
 
     public:
-    void push( formula_ptr< var_t > f ) { 
+    void push( formula_ptr< lit_t > f ) { 
         children.push_back( f ); 
     };
 
@@ -138,13 +148,13 @@ struct nnary_node : formula< var_t >
 
 //// And ////
 
-template < typename var_t >
-struct node_and : public nnary_node< var_t >
+template < typename lit_t >
+struct node_and : public nnary_node< lit_t >
 {
-    node_and() : nnary_node< var_t >( {} ) {};
+    node_and() : nnary_node< lit_t >( {} ) {};
 
-    node_and( std::vector< formula_ptr< var_t > > children ) 
-        : nnary_node< var_t >( std::move( children ) ) {};
+    node_and( std::vector< formula_ptr< lit_t > > children ) 
+        : nnary_node< lit_t >( std::move( children ) ) {};
 
     std::ostream& to_string_go( std::ostream &ss, int level ) override 
     {
@@ -153,17 +163,17 @@ struct node_and : public nnary_node< var_t >
         return ss;
     }
 
-    lit_t< var_t > to_cnf_go( cnf_builder< var_t > &builder ) override 
+    lit_t to_cnf_go( cnf_builder< lit_t > &builder ) override 
     {
-        var_t node_var = builder.get_help_var();
+        lit_t node_lit = builder.get_help_lit();
         auto children_ids = this->export_children( builder );
         for ( auto &i : children_ids ) {
-            builder.push( { i, { node_var, false } } );
+            builder.push( { i, -node_lit } );
             i = -i;
         }
-        children_ids.push_back( { node_var, true } );
+        children_ids.push_back( node_lit );
         builder.push( std::move( children_ids ) );
-        return { node_var, true };
+        return node_lit;
     };
 };
 
@@ -181,14 +191,14 @@ formula_ptr< var_t > make_and( std::vector< formula_ptr< var_t > > children )
 
 //// Or //// 
 
-template < typename var_t >
-struct node_or : public nnary_node< var_t >
+template < typename lit_t >
+struct node_or : public nnary_node< lit_t >
 {
     node_or() 
-        : nnary_node< var_t >( {} ) {};
+        : nnary_node< lit_t >( {} ) {};
 
-    node_or( std::vector< formula_ptr< var_t > > children ) 
-        : nnary_node< var_t >( std::move( children ) ){};
+    node_or( std::vector< formula_ptr< lit_t > > children ) 
+        : nnary_node< lit_t >( std::move( children ) ){};
 
     std::ostream& to_string_go( std::ostream &ss, int level ) override 
     {
@@ -197,82 +207,78 @@ struct node_or : public nnary_node< var_t >
         return ss;
     }
 
-    lit_t< var_t > to_cnf_go( cnf_builder< var_t >& builder ) override 
+    lit_t to_cnf_go( cnf_builder< lit_t >& builder ) override 
     {
-        var_t node_var = builder.get_help_var();
+        lit_t node_lit = builder.get_help_lit();
         auto children_ids = this->export_children( builder );
         for ( auto &i : children_ids )
-            builder.push( { -i, { node_var, true } } );
-        children_ids.push_back( { node_var, false } );
+            builder.push( { -i, node_lit } );
+        children_ids.push_back( -node_lit );
         builder.push( std::move( children_ids ) );
-        return { node_var, true };
+        return node_lit;
     };
 };
 
-template < typename var_t >
-formula_ptr< var_t > make_or()
+template < typename lit_t >
+formula_ptr< lit_t > make_or()
 {
-    return std::make_shared< node_or< var_t > >();
+    return std::make_shared< node_or< lit_t > >();
 }
 
-template < typename var_t >
-formula_ptr< var_t > make_or( std::vector< formula_ptr< var_t > > children )
+template < typename lit_t >
+formula_ptr< lit_t > make_or( std::vector< formula_ptr< lit_t > > children )
 {
-    return std::make_shared< node_or< var_t > >( children );
+    return std::make_shared< node_or< lit_t > >( children );
 }
 
-template < typename var_t >
-formula_ptr< var_t > make_imp( formula_ptr< var_t > premise
-                          , formula_ptr< var_t > conclusion )
+template < typename lit_t >
+formula_ptr< lit_t > make_imp( formula_ptr< lit_t > premise
+                          , formula_ptr< lit_t > conclusion )
 {
-    std::vector< formula_ptr< var_t > > elements;
+    std::vector< formula_ptr< lit_t > > elements;
     elements.push_back( make_not( premise ) );
     elements.push_back( conclusion );
-    return std::make_shared< node_or< var_t > >( elements );
+    return std::make_shared< node_or< lit_t > >( elements );
 }
 
-template < typename var_t >
-formula_ptr< var_t > make_imp( std::vector< formula_ptr< var_t > > premises
-                          , formula_ptr< var_t > conclusion )
+template < typename lit_t >
+formula_ptr< lit_t > make_imp( std::vector< formula_ptr< lit_t > > premises
+                          , formula_ptr< lit_t > conclusion )
 {
-    std::vector< formula_ptr< var_t > > elements;
+    std::vector< formula_ptr< lit_t > > elements;
     for ( auto &p : premises )
         elements.push_back( make_not( p ) );
     elements.push_back( conclusion );
-    return std::make_shared< node_or< var_t > >( elements );
+    return std::make_shared< node_or< lit_t > >( elements );
 }
 
 //// Variable ////
 
-template< typename var_t >
-struct node_literal : formula< var_t >
+template< typename lit_t >
+struct node_literal : formula< lit_t >
 {
-    var_t var;
-    bool pos;
+    lit_t lit;
 
-    node_literal( var_t var, bool pos ) 
-        : var( var )
-        , pos( pos )
+    node_literal( lit_t lit ) : lit( lit )
     {};
 
     std::ostream& to_string_go( std::ostream &ss, int level ) override 
     {
         str_indent( ss, level * 2 ); 
-        if ( !pos ) ss << "! ";
-        ss << var << "\n";
+        ss << lit << "\n";
         return ss;
     }
 
-    lit_t< var_t > to_cnf_go( cnf_builder< var_t >& builder ) override 
+    lit_t to_cnf_go( cnf_builder< lit_t >& builder ) override 
     {
-        return { var, pos };
+        return lit;
     };
 };
 
-template< typename var_t >
-formula_ptr< var_t > make_lit( var_t var, bool pos = true )
+template< typename lit_t >
+formula_ptr< lit_t > make_lit( lit_t lit )
 {
-    return std::make_shared< node_literal< var_t > >( var, pos );
+    return std::make_shared< node_literal< lit_t > >( lit );
 }
 
 }

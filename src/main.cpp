@@ -3,12 +3,13 @@
 //       - it won't be compiled over and over again, but sat will be 
 //         probably the bottleneck
 
-
+#include <Discreture/Combinations.hpp>
 #include <boost/dynamic_bitset/dynamic_bitset.hpp>
 #include <utility>
 #include <vector>
 #include <discreture.hpp>
 
+#include "kck_cnf.hpp"
 #include "kck_form.hpp" 
 #include "kck_sat.hpp"
 
@@ -18,10 +19,11 @@ using pattern = std::array< int, 3 >;
 using palette_t = std::vector< pattern >;
 
 using var_t = std::pair< char, std::vector< int > >;
-using lit_t = node_literal< var_t >;
-using and_t = node_and< var_t >;
-using or_t = node_or< var_t >;
-using form_t = formula_ptr< var_t >;
+using lit_t = literal< var_t >;
+using nlit_t = node_literal< lit_t >;
+using and_t = node_and< lit_t >;
+using or_t = node_or< lit_t >;
+using form_t = formula_ptr< lit_t >;
 
 using discreture::operator<<;
 
@@ -41,85 +43,6 @@ std::ostream& operator<<( std::ostream& os, var_t var )
     return os << "(" << var.first << "," << var.second << ")";
 }
 
-struct hypergraph_formula
-{
-    int n = 0;
-
-    hypergraph_formula( int n ) : n( n ) {};
-
-    var_t arc_col_var( int i, int j, int c )
-    {
-        assert( i < j );
-        return { 'l', { i, j, c } };
-    }
-
-    var_t edge_in_var( int i, int j, int k )
-    {
-        assert( i < j && j < k );
-        return { 'e', { i, j, k } };
-    }
-
-    form_t graph_is_colored( int colors )
-    {
-        // Arc get exacly one color
-        and_t colored;
-        for ( auto &&x : discreture::combinations( n, 2 ) )
-        {
-            int i = x[ 0 ], j = x[ 1 ]; 
-
-            // Each arc gets one color 
-            or_t color_clauses;
-            for( int c = 0; c < colors; c++ )
-                color_clauses.push( make_lit( arc_col_var( i, j, c ) ) );
-            colored.push( std::move( color_clauses ) );
-
-            // No arc receives two colors
-            for( auto && cc : discreture::combinations( colors , 2 ) )
-            {
-                if ( cc[ 0 ] == cc[ 1 ] ) continue;
-                colored.push( make_or< var_t >( 
-                    { make_lit( arc_col_var( i, j, cc[ 0 ] ), false )
-                    , make_lit( arc_col_var( i, j, cc[ 1 ] ), false ) } ) );
-            }
-        }
-        return std::make_shared< and_t >( colored );
-    }
-
-    form_t coloring_respects_palette( int colors, palette_t palette )
-    {
-        and_t triangles_valid;
-        for ( auto && x : discreture::combinations( n, 3 ) )
-        {
-            // every triangle has one of okay patterns
-            int i = x[ 0 ], j = x[ 1 ], k = x[ 2 ];
-
-            or_t triangle_cond;
-            for ( auto &p : palette )
-                triangle_cond.push( make_and< var_t >( 
-                    { make_lit( arc_col_var( i, j, p[ 0 ] ) )
-                    , make_lit( arc_col_var( j, k, p[ 1 ] ) )
-                    , make_lit( arc_col_var( i, k, p[ 2 ] ) ) } ) );
-            // e_ijk => triangle needs to be correctly colored
-            //triangles_valid.push( 
-                //make_or< var_t >( { make_lit( edge_in_var( i, j, k ), false ) 
-                                  //, std::make_shared< or_t >( triangle_cond ) } ) );
-            triangles_valid.push( triangle_cond );
-        }
-        return std::make_shared< and_t >( triangles_valid );
-    }
-
-    form_t coloring_formula( int colors, palette_t palette )
-    { 
-        and_t formula;
-
-        formula.push( graph_is_colored( colors ) );
-        formula.push( coloring_respects_palette( colors, palette ) );
-
-        return std::make_shared< and_t >( formula );
-    }
-};
-
-
 constexpr int choose( int n, int k ) 
 {
     int nom = 1; 
@@ -132,8 +55,6 @@ constexpr int choose( int n, int k )
     return nom / den;
 }
 
-template < int n >
-using edge_set_t = std::bitset< choose( n, 3 ) >;
 
 
 //// 3 Uniform Hypergraph Lattice Explorer ////////////////////////////////////
@@ -178,49 +99,34 @@ void trav_3hg_lat( hg_pred< hg_t > break_fun
 
 //// Application //////////////////////////////////////////////////////////////
 
-var_t labeler( int i ) { return { 'X', { i } }; }
+lit_t labeler( int i ) { return { { 'X', { i } }, true }; }
 
-cnf_t< var_t > get_palette_cnf( int n, int colors, palette_t palette
-                              , int i, int j, int k )
+formula_ptr< lit_t > llit( char c, std::vector< int > indcs, bool pos )
+{
+    return make_lit< lit_t >( { { c, indcs }, pos } );
+}
+
+cnf_t< lit_t > get_palette_cnf( int n, int colors, palette_t palette
+                              , int i, int j, int k, cnf_builder< lit_t > &builder )
 {
     or_t triangle_cond;
     for ( auto &p : palette )
-        triangle_cond.push( make_and< var_t >( 
-            { make_lit< var_t >( { 'c', { i, j, p[ 0 ] } }, true )
-            , make_lit< var_t >( { 'c', { i, j, p[ 0 ] } }, true )
-            , make_lit< var_t >( { 'c', { i, j, p[ 0 ] } }, true ) } ) );
-    return triangle_cond.to_cnf( labeler );
+        triangle_cond.push( make_and< lit_t >( 
+            { llit( 'c', { i, j, p[ 0 ] }, true )
+            , llit( 'c', { i, j, p[ 0 ] }, true )
+            , llit( 'c', { i, j, p[ 0 ] }, true ) } ) );
+    return triangle_cond.to_cnf( builder );
 }
 
-cnf_t< var_t > get_palette_cnf( int n, int colors, palette_t palette )
+cnf_t< lit_t > get_coloring_cnf( int n, int colors )
 {
-    and_t triangles_valid;
-    for ( auto && x : discreture::combinations( n, 3 ) )
-    {
-        // every triangle has one of okay patterns
-        int i = x[ 0 ], j = x[ 1 ], k = x[ 2 ];
-
-        or_t triangle_cond;
-        for ( auto &p : palette )
-            triangle_cond.push( make_and< var_t >( 
-                { make_lit< var_t >( { 'c', { i, j, p[ 0 ] } }, true )
-                , make_lit< var_t >( { 'c', { i, j, p[ 0 ] } }, true )
-                , make_lit< var_t >( { 'c', { i, j, p[ 0 ] } }, true ) } ) );
-        triangles_valid.push( triangle_cond );
-    }
-
-    return triangles_valid.to_cnf( labeler ); 
-}
-
-cnf_t< var_t > get_coloring_cnf( int n, int colors )
-{
-    cnf_t< var_t > cnf;
+    cnf_t< lit_t > cnf;
     for ( auto &&x : discreture::combinations( n, 2 ) )
     {
         int i = x[ 0 ], j = x[ 1 ];
 
         // each edge gets at least one color
-        cnf_clause_t< var_t > clause;
+        cnf_clause_t< lit_t > clause;
         for ( int c = 0; c < colors; c++ ) 
             clause.push_back( { { 'c', { i, j, c } }, true } );
         cnf.push_back( clause );
@@ -235,20 +141,44 @@ cnf_t< var_t > get_coloring_cnf( int n, int colors )
     return cnf;
 }
 
+cnf_tree_t< lit_t > build_coloring_tree( int n, int colors
+                                       , const palette_t &palette
+                                       , std::shared_ptr< boost::dynamic_bitset<> > mask )
+{
+    std::vector< cnf_tree_t< lit_t > > formulas;
+
+    formulas.push_back( cnf_leaf( get_coloring_cnf( n, colors ) ) );
+
+
+    std::vector< cnf_tree_t< lit_t > > edge_forms;
+    cnf_builder< lit_t > builder( labeler );
+    for ( auto &&x : discreture::combinations( n, 3 ) )
+    {
+        int i = x[ 0 ], j = x[ 1 ], k = x[ 2 ];
+        edge_forms.push_back( get_palette_cnf( n, colors, palette, i, j, k, builder) );
+    }
+
+    formulas.push_back( cnf_rose_masked< lit_t >( edge_forms, mask ) );
+
+    return cnf_rose< lit_t >( formulas );
+}
+
+template < int n >
+using edge_set_t = std::bitset< choose( n, 3 ) >;
+
+palette_t blue_palette = { { 1, 2, 3 }, { 4, 1, 5 }, { 6, 7, 1 } };
+
 template < int vertex_count > 
 struct hypergraph_t
 {
     int n = vertex_count;
-    edge_set_t< vertex_count > edge_set;
+    std::shared_ptr< edge_set_t< vertex_count > > edge_set;
 
-    cnf_comp_mask< var_t > red_coloring;
-    cnf_comp_mask< var_t > blue_coloring;
+    cnf_tree_t< lit_t > blue_coloring;
 
-    hypergraph_t()
+    hypergraph_t() : edge_set( choose( n, 3 ) )
+                   , blue_coloring( build_coloring_tree( n, 7, blue_palette, edge_set ) )
     {
-        cnf_lab_t< var_t > blue_cnf;
-        cnf_lab_t< var_t > red_cnf;
-
     }
 
     void add_edge( int index )
