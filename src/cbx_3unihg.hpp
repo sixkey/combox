@@ -35,6 +35,14 @@ void trav_3hg_lat_go( hg_t &h
     if ( edge_index >= cbx::choose( h.n, 3 ) ) 
         return;
 
+    h.remove_edge( edge_index );
+    trav_3hg_lat_go< hg_t >( h
+                           , edge_index + 1
+                           , false
+                           , break_fun
+                           , yield_fun
+                           , collect_fun );
+
     h.add_edge( edge_index );
     trav_3hg_lat_go< hg_t >( h
                            , edge_index + 1
@@ -43,12 +51,6 @@ void trav_3hg_lat_go( hg_t &h
                            , yield_fun
                            , collect_fun );
     h.remove_edge( edge_index );
-    trav_3hg_lat_go< hg_t >( h
-                           , edge_index + 1
-                           , false
-                           , break_fun
-                           , yield_fun
-                           , collect_fun );
 }
 
 template < typename hg_t >
