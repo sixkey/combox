@@ -1,6 +1,6 @@
 // TODO: - finish creating clauses
 //       - one triangle will have more clauses, is bitmask really useful?
-//       - it won't be compiled over and over again, but sat will be 
+//       - it won't be compiled over and over again, but sat will be
 //         probably the bottleneck
 //
 // REM: - it may be hard to index the bitset as we are using combinations
@@ -22,7 +22,7 @@
 
 #include "cbx_3unihg.hpp"
 #include "cbx_sim.hpp"
-#include "cbx_utils.hpp"  
+#include "cbx_utils.hpp"
 
 #include "main.hpp"
 
@@ -54,7 +54,7 @@ std::ostream& operator<<( std::ostream& os, const std::set< int > &s )
 
 using namespace kck;
 
-//// Application //////////////////////////////////////////////////////////////
+//// Variables ////////////////////////////////////////////////////////////////
 
 lit_t labeler( int i ) { return { { 'X', { i } }, true }; }
 
@@ -73,7 +73,9 @@ var_t edge_present( int edge_index )
     return { 'e', { edge_index } };
 }
 
-cnf_t< lit_t > get_palette_cnf( palette_t palette
+//// Coloring formula /////////////////////////////////////////////////////////
+
+cnf_t< lit_t > cnf_triangle( const palette_t &palette
                               , int i, int j, int k, int edge_index
                               , cnf_builder< lit_t > &builder )
 {
@@ -83,14 +85,29 @@ cnf_t< lit_t > get_palette_cnf( palette_t palette
     triangle_cond.push( llit( edge_present( edge_index ), false ) );
     // Or it needs at least one of the patterns
     for ( auto &p : palette )
-        triangle_cond.push( forms::f_and( 
+        triangle_cond.push( forms::f_and(
             { llit( arc_color( i, j, p[ 0 ] ), true )
             , llit( arc_color( j, k, p[ 1 ] ), true )
             , llit( arc_color( i, k, p[ 2 ] ), true ) } ) );
     return triangle_cond.to_cnf( builder );
 }
 
-cnf_t< lit_t > get_coloring_cnf( int n, int colors )
+cnf_t< lit_t > cnf_triangles( const palette_t &palette, int n )
+{
+    cnf_t< lit_t > cnf;
+    cnf_builder< lit_t > builder( labeler );
+
+    int edge_index = 0;
+    for ( auto &&x : discreture::combinations( n, 3 ) )
+    {
+        int i = x[ 0 ], j = x[ 1 ], k = x[ 2 ];
+        add_to( cnf, cnf_triangle( palette, i, j, k, edge_index, builder ) );
+        edge_index++;
+    }
+    return cnf;
+}
+
+cnf_t< lit_t > cnf_coloring( int n, int colors )
 {
     cnf_t< lit_t > cnf;
     for ( auto &&x : discreture::combinations( n, 2 ) )
@@ -100,14 +117,14 @@ cnf_t< lit_t > get_coloring_cnf( int n, int colors )
 
         // each edge gets at least one color
         cnf_clause_t< lit_t > clause;
-        for ( int c = 0; c < colors; c++ ) 
+        for ( int c = 0; c < colors; c++ )
             clause.push_back( { arc_color( i, j, c ), true } );
         cnf.push_back( clause );
 
         // each edge gets no more than two colors
         for ( auto &&cc : discreture::combinations( colors, 2 ) ) {
             if ( cc[ 0 ] == cc[ 1 ] ) continue;
-            cnf.push_back( { { arc_color( i, j, cc[ 0 ] ), false } 
+            cnf.push_back( { { arc_color( i, j, cc[ 0 ] ), false }
                            , { arc_color( i, j, cc[ 1 ] ), false } } );
         }
     }
@@ -118,25 +135,18 @@ cnf_t< lit_t > build_coloring_cnf( int n, int colors
                                  , const palette_t &palette )
 {
     cnf_t< lit_t > cnf;
-
-    add_to( cnf, get_coloring_cnf( n, colors ) );
-
-    cnf_builder< lit_t > builder( labeler );
-
-    int edge_index = 0;
-    for ( auto &&x : discreture::combinations( n, 3 ) )
-    {
-        int i = x[ 0 ], j = x[ 1 ], k = x[ 2 ];
-        add_to( cnf, get_palette_cnf( palette, i, j, k, edge_index, builder ) );
-        edge_index++;
-    }
-
+    add_to( cnf, cnf_coloring( n, colors ) );
+    add_to( cnf, cnf_triangles( palette, n ) );
     return cnf;
 }
 
+//// Blue coloring ////////////////////////////////////////////////////////////
+
 palette_t blue_palette = { { 1, 2, 3 }, { 4, 1, 5 }, { 6, 7, 1 } };
 
-struct hypergraph_t 
+//// Graph representation /////////////////////////////////////////////////////
+
+struct hypergraph_t
 {
     int n;
     std::set< std::set< int > > edges;
@@ -153,26 +163,16 @@ struct lat_hypergraph_t
 
     bimap< var_t, int > translation;
 
-    cnf_t< int > blue_translated;
-    cnf_t< lit_t > blue_orig;
+    sat_solver_t blue_solver;
 
-    sat_solver_t solver;
-
-    lat_hypergraph_t( int n ) 
+    lat_hypergraph_t( int n )
         : n( n )
         , edge_set( std::make_shared< boost::dynamic_bitset<> >( cbx::choose( n, 3 ) ) )
     {
-        blue_orig = build_coloring_cnf( n, 7, blue_palette );
-        auto [ translated, translation ] = to_int_cnf( blue_orig );
-        blue_translated = std::move( translated );
+        auto blue_formula = build_coloring_cnf( n, 7, blue_palette );
+        auto [ translated, translation ] = to_int_cnf( blue_formula );
         this->translation = translation;
-
-        add_cnf( solver, blue_translated );
-
-        for ( int i = 0; i < cbx::choose( n, 3 ); i++ )
-        {
-            remove_edge( i );
-        }
+        add_cnf( blue_solver, translated );
     }
 
     void add_edge( int index )
@@ -185,14 +185,23 @@ struct lat_hypergraph_t
         ( *edge_set )[ index ] = false;
     }
 
+    int solve_blue()
+    {
+        for ( int i = 0; i < cbx::choose( n, 3 ); i++ )
+        {
+            int edge_var = translation.left.at( edge_present( i ) );
+            blue_solver.assume( ( *edge_set )[ i ] ? edge_var : - edge_var );
+        }
+        return blue_solver.solve();
+    }
+
     hypergraph_t to_hypergraph() const
     {
-
         std::set< std::set< int > > edges;
         int counter = 0;
         for ( auto &x : discreture::combinations( n, 3 ) )
         {
-            if ( ( *edge_set )[ counter ] ) 
+            if ( ( *edge_set )[ counter ] )
                 edges.insert( { x[ 0 ], x[ 1 ], x[ 2 ] } );
             counter++;
         }
@@ -215,6 +224,9 @@ std::ostream& operator<<( std::ostream& os, const lat_hypergraph_t& h )
     return os << h.to_hypergraph();
 }
 
+//// Red coloring /////////////////////////////////////////////////////////////
+
+
 bool is_perm_colorable( const lat_hypergraph_t &h, const std::vector< int > &perm )
 {
     int n = h.n;
@@ -231,19 +243,20 @@ bool is_perm_colorable( const lat_hypergraph_t &h, const std::vector< int > &per
         {
             int i = perm[ p[ 0 ] ], j = perm[ p[ 1 ] ], k = perm[ p[ 2 ] ];
             cbx::sort_i( i, j, k );
+            assert( i < j && j < k );
             // The arc serves as left edge
-            roles[ cbx::inc_i( n, i, j ) ] |= 1;
+            roles[ cbx::adj_i( n, i, j ) ] |= 1;
             // The arc serves as right edge
-            roles[ cbx::inc_i( n, j, k ) ] |= 2;
+            roles[ cbx::adj_i( n, j, k ) ] |= 2;
             // The arc serves as top edge
-            roles[ cbx::inc_i( n, i, k ) ] |= 4;
+            roles[ cbx::adj_i( n, i, k ) ] |= 4;
         }
         counter += 1;
     }
 
     for ( auto v : roles )
         // If any arc serves as both left, top, right
-        if ( v == 7 ) 
+        if ( v == 7 )
             return false;
     return true;
 }
@@ -258,10 +271,12 @@ bool is_r_uncolorable( lat_hypergraph_t &h )
 
 using coloring_t = std::map< std::pair< int, int >, int >;
 
-coloring_t get_coloring_solution( const lat_hypergraph_t &h, int colors, sat_solver_t &solver )
+coloring_t get_coloring_solution( const lat_hypergraph_t &h
+                                , int colors
+                                , sat_solver_t &solver )
 {
     coloring_t coloring;
-    
+
     int n = h.n;
 
     const bimap< var_t, int > &translation = h.translation;
@@ -278,17 +293,14 @@ void print_graph( lat_hypergraph_t &h )
 {
     std::cout << h.to_hypergraph() << std::endl;
 
-    sat_solver_t solver;
-    add_cnf( solver, h.blue_translated );
-
-    int res = solver.solve();
+    int res = h.solve_blue();
     assert( res == SAT_Y );
 
-    coloring_t coloring = get_coloring_solution( h, 7, solver );
+    coloring_t coloring = get_coloring_solution( h, 7, h.blue_solver );
 
     //show( std::cout, h.blue_orig, true );
 
-    for ( const auto &[ key, item ] : coloring ) 
+    for ( const auto &[ key, item ] : coloring )
     {
         std::cout << key << "->" << item << std::endl;
     }
@@ -296,33 +308,30 @@ void print_graph( lat_hypergraph_t &h )
 
 bool is_b_uncolorable( lat_hypergraph_t &h )
 {
-    if ( h.counter_graph_entered % 10000 == 0 )
+    if ( h.counter_graph_entered % 100000 == 0 )
     {
-        trace( "sts", h.counter_graph_entered, h.counter_blue_colorable );
+        trace( "sts", h.counter_graph_entered, h.counter_blue_colorable, *h.edge_set );
     }
     h.counter_graph_entered++;
 
     //trace( "edges", *h.edge_set );
-    
-    for ( int i = 0; i < cbx::choose( h.n, 3 ); i++ )
-    {
-        int edge_var = h.translation.left.at( edge_present( i ) );
-        h.solver.assume( ( *h.edge_set )[ i ] ? edge_var : - edge_var );
-    }
 
-    int res = h.solver.solve();
+    int res = h.solve_blue();
     if ( res == SAT_U ) throw std::runtime_error( "sat does not know" );
-    
+
     if ( res == SAT_Y )
         h.counter_blue_colorable ++;
 
-    return res == SAT_N; 
+    return res == SAT_N;
 }
 
 void test_b()
 
 {
     lat_hypergraph_t h( 5 );
+
+    assert( ! is_b_uncolorable( h ) );
+
     for ( int i = 0; i < cbx::choose( 5, 3 ); i++)
     {
         h.add_edge( i );
