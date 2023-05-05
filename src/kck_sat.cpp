@@ -1,6 +1,5 @@
-
-
 #include "kck_sat.hpp"
+#include "kck_log.hpp"
 
 namespace kck {
 
@@ -29,10 +28,6 @@ void add_cnf( sat_solver_t& sat_solver, const cnf_rose_masked< int > &rose )
     for ( int i = 0; i < rose.children.size(); i++ )
     {
         if ( (*rose.mask)[ i ] ) add_cnf( sat_solver, rose.children[ i ] );
-    }
-    for ( auto& child : rose.children )
-    {
-        add_cnf( sat_solver, child );
     }
 }
 

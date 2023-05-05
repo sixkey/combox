@@ -2,35 +2,34 @@
 //       - one triangle will have more clauses, is bitmask really useful?
 //       - it won't be compiled over and over again, but sat will be 
 //         probably the bottleneck
+//
+// REM: - it may be hard to index the bitset as we are using combinations
 
+#include "kck_str.hpp"
 #include <Discreture/Combinations.hpp>
 #include <boost/dynamic_bitset/dynamic_bitset.hpp>
 #include <utility>
 #include <vector>
 #include <discreture.hpp>
+#include <map>
 
-#include "kck_cnf.hpp"
-#include "kck_form.hpp" 
-#include "kck_sat.hpp"
+#define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_DEBUG
 
-using namespace kck;
+#include "spdlog/spdlog.h"
+#include "kck_log.hpp"
 
-using pattern = std::array< int, 3 >;
-using palette_t = std::vector< pattern >;
+#include "cbx_3unihg.hpp"
+#include "cbx_sim.hpp"
+#include "cbx_utils.hpp"  
 
-using var_t = std::pair< char, std::vector< int > >;
-using lit_t = literal< var_t >;
-using nlit_t = node_literal< lit_t >;
-using and_t = node_and< lit_t >;
-using or_t = node_or< lit_t >;
-using form_t = formula_ptr< lit_t >;
+#include "main.hpp"
 
-using discreture::operator<<;
+namespace kck {
 
-std::ostream& operator<<( std::ostream& os, std::vector< int > v )
+std::ostream& operator<<( std::ostream& os, const std::vector< int > &v )
 {
     os << "[";
-    for ( int i = 0; i < v.size(); i++ )
+    for ( std::size_t i = 0; i < v.size(); i++ )
     {
         os << v[ i ];
         if ( i < v.size() - 1 ) os << ", ";
@@ -38,83 +37,47 @@ std::ostream& operator<<( std::ostream& os, std::vector< int > v )
     return os << "]";
 }
 
-std::ostream& operator<<( std::ostream& os, var_t var )
+std::ostream& operator<<( std::ostream& os, const std::set< int > &s )
 {
-    return os << "(" << var.first << "," << var.second << ")";
-}
-
-constexpr int choose( int n, int k ) 
-{
-    int nom = 1; 
-    int den = 1;
-    for ( int i = 0; i < k; i++ )
+    os << "{";
+    for ( auto it = s.begin(); it != s.end(); it++ )
     {
-        nom *= n--;
-        den *= k--;
+        if ( it != s.begin() ) os << ", ";
+        os << *it;
     }
-    return nom / den;
+    return os << "}";
 }
 
-
-
-//// 3 Uniform Hypergraph Lattice Explorer ////////////////////////////////////
-
-template < typename hg_t >
-using hg_pred = bool *( const hg_t& );
-
-template < typename hg_t >
-using hg_coll = void *( const hg_t& );
-
-template < typename hg_t, int n > 
-void trav_3hg_lat_go( hg_t &h 
-                    , int edge_index
-                    , hg_pred< hg_t > break_fun
-                    , hg_pred< hg_t > yield_fun
-                    , hg_pred< hg_t > collect_fun )
-{
-    if ( edge_index > choose( n, 3 ) )
-        return;
-
-    if ( break_fun( h ) )
-        return;
-
-    if ( yield_fun( h ) ) {
-        collect_fun( h );
-        return;
-    }
-    trav_3hg_lat_go< hg_t, n >( h, edge_index + 1 );
-    h.add_edge( edge_index );
-    trav_3hg_lat_go< hg_t, n >( h, edge_index + 1 );
-    h.remove_edge( edge_index );
 }
 
-template < typename hg_t, int n >
-void trav_3hg_lat( hg_pred< hg_t > break_fun
-                 , hg_pred< hg_t > yield_fun
-                 , hg_pred< hg_t > collect_fun )
-{
-    hg_t h;
-    trav_3hg_lat_go< hg_t, n >( h, 0, break_fun, yield_fun, collect_fun );
-}
+using namespace kck;
 
 //// Application //////////////////////////////////////////////////////////////
 
 lit_t labeler( int i ) { return { { 'X', { i } }, true }; }
 
-formula_ptr< lit_t > llit( char c, std::vector< int > indcs, bool pos )
+formula_ptr< lit_t > llit( var_t v, bool pos )
 {
-    return make_lit< lit_t >( { { c, indcs }, pos } );
+    return forms::f_lit( { v, pos } );
 }
 
-cnf_t< lit_t > get_palette_cnf( int n, int colors, palette_t palette
-                              , int i, int j, int k, cnf_builder< lit_t > &builder )
+var_t arc_color( int i, int j, int color )
 {
-    or_t triangle_cond;
+    return { 'c', { i, j, color } };
+}
+
+cnf_t< lit_t > get_palette_cnf( palette_t palette
+                              , int i, int j, int k
+                              , cnf_builder< lit_t > &builder )
+{
+    assert( i < j && j < k );
+    forms::or_t triangle_cond;
     for ( auto &p : palette )
-        triangle_cond.push( make_and< lit_t >( 
-            { llit( 'c', { i, j, p[ 0 ] }, true )
-            , llit( 'c', { i, j, p[ 0 ] }, true )
-            , llit( 'c', { i, j, p[ 0 ] }, true ) } ) );
+        triangle_cond.push( forms::f_and( 
+            { llit( arc_color( i, j, p[ 0 ] ), true )
+            , llit( arc_color( j, k, p[ 1 ] ), true )
+            , llit( arc_color( i, k, p[ 2 ] ), true ) } ) );
+    //trace( "tria", i, j, k, triangle_cond );
     return triangle_cond.to_cnf( builder );
 }
 
@@ -124,18 +87,19 @@ cnf_t< lit_t > get_coloring_cnf( int n, int colors )
     for ( auto &&x : discreture::combinations( n, 2 ) )
     {
         int i = x[ 0 ], j = x[ 1 ];
+        assert( i < j );
 
         // each edge gets at least one color
         cnf_clause_t< lit_t > clause;
         for ( int c = 0; c < colors; c++ ) 
-            clause.push_back( { { 'c', { i, j, c } }, true } );
+            clause.push_back( { arc_color( i, j, c ), true } );
         cnf.push_back( clause );
 
         // each edge gets no more than two colors
         for ( auto &&cc : discreture::combinations( colors, 2 ) ) {
             if ( cc[ 0 ] == cc[ 1 ] ) continue;
-            cnf.push_back( { { { 'c', { i, j, cc[ 0 ] } }, false } 
-                           , { { 'c', { i, j, cc[ 1 ] } }, false } } );
+            cnf.push_back( { { arc_color( i, j, cc[ 0 ] ), false } 
+                           , { arc_color( i, j, cc[ 1 ] ), false } } );
         }
     }
     return cnf;
@@ -149,57 +113,216 @@ cnf_tree_t< lit_t > build_coloring_tree( int n, int colors
 
     formulas.push_back( cnf_leaf( get_coloring_cnf( n, colors ) ) );
 
+    // Edge requirements 
 
     std::vector< cnf_tree_t< lit_t > > edge_forms;
     cnf_builder< lit_t > builder( labeler );
     for ( auto &&x : discreture::combinations( n, 3 ) )
     {
         int i = x[ 0 ], j = x[ 1 ], k = x[ 2 ];
-        edge_forms.push_back( get_palette_cnf( n, colors, palette, i, j, k, builder) );
+        auto cnf = get_palette_cnf( palette, i, j, k, builder );
+        edge_forms.push_back( cnf );
     }
 
     formulas.push_back( cnf_rose_masked< lit_t >( edge_forms, mask ) );
 
-    return cnf_rose< lit_t >( formulas );
+    return cnf_rose< lit_t >( std::move( formulas ) );
 }
-
-template < int n >
-using edge_set_t = std::bitset< choose( n, 3 ) >;
 
 palette_t blue_palette = { { 1, 2, 3 }, { 4, 1, 5 }, { 6, 7, 1 } };
 
-template < int vertex_count > 
-struct hypergraph_t
+struct hypergraph_t 
 {
-    int n = vertex_count;
-    std::shared_ptr< edge_set_t< vertex_count > > edge_set;
+    int n;
+    std::set< std::set< int > > edges;
+};
 
-    cnf_tree_t< lit_t > blue_coloring;
+struct lat_hypergraph_t
+{
+    int n;
+    std::shared_ptr< boost::dynamic_bitset<> > edge_set;
 
-    hypergraph_t() : edge_set( choose( n, 3 ) )
-                   , blue_coloring( build_coloring_tree( n, 7, blue_palette, edge_set ) )
+    int counter_graph_entered = 0;
+    int counter_blue_colorable = 0;
+
+    bimap< var_t, int > translation;
+
+    cnf_tree_t< int > blue_translated;
+    cnf_tree_t< lit_t > blue_orig;
+
+    lat_hypergraph_t( int n ) 
+        : n( n )
+        , edge_set( std::make_shared< boost::dynamic_bitset<> >( cbx::choose( n, 3 ) ) )
     {
+        blue_orig = build_coloring_tree( n, 7, blue_palette, edge_set );
+
+        //trace( "blue", blue_orig );
+
+        auto [ translated, translation ] = to_int_cnf( blue_orig );
+        blue_translated = std::move( translated );
+        this->translation = translation;
     }
 
     void add_edge( int index )
     {
-        edge_set[ index ] = true;
+        ( *edge_set )[ index ] = true;
     }
 
     void remove_edge( int index )
     {
-        edge_set[ index ] = false;
+        ( *edge_set )[ index ] = false;
     }
+
+    hypergraph_t to_hypergraph() const
+    {
+
+        std::set< std::set< int > > edges;
+        int counter = 0;
+        for ( auto &x : discreture::combinations( n, 3 ) )
+        {
+            if ( ( *edge_set )[ counter ] ) 
+                edges.insert( { x[ 0 ], x[ 1 ], x[ 2 ] } );
+            counter++;
+        }
+
+        return { n, std::move( edges ) };
+    }
+
 };
 
-
-
-template < int n >
-bool is_r_colorable( hypergraph_t< n > h )
+std::ostream& operator<<( std::ostream& os, const hypergraph_t& h )
 {
+    os << "Hypergraph[" << h.n << "] {";
+    for ( auto &e : h.edges )
+        str_indent( os, 2 ) << e << std::endl;
+    return os;
+}
+
+std::ostream& operator<<( std::ostream& os, const lat_hypergraph_t& h )
+{
+    return os << h.to_hypergraph();
+}
+
+bool is_perm_colorable( const lat_hypergraph_t &h, const std::vector< int > &perm )
+{
+    int n = h.n;
+
+    std::vector< unsigned int > roles( h.n * h.n, 0 );
+
+    int counter = 0;
+
+    // This uses the fact, that the edge_set is created using the very same
+    // discreture::combinations this is rather ugly and should be fixed.
+    for ( auto &&p : discreture::combinations( n, 3 ) )
+    {
+        int i = p[ 0 ], j = p[ 1 ], k = p[ 2 ];
+
+        if ( ( *h.edge_set )[ counter ] )
+        {
+            int i = perm[ p[ 0 ] ], j = perm[ p[ 1 ] ], k = perm[ p[ 2 ] ];
+            cbx::sort_i( i, j, k );
+            // The arc serves as left edge
+            roles[ cbx::inc_i( n, i, j ) ] |= 1;
+            // The arc serves as right edge
+            roles[ cbx::inc_i( n, j, k ) ] |= 2;
+            // The arc serves as top edge
+            roles[ cbx::inc_i( n, i, k ) ] |= 4;
+        }
+        counter += 1;
+    }
+
+    for ( auto v : roles )
+        // If any arc serves as both left, top, right
+        if ( v == 7 ) 
+            return false;
+    return true;
 }
 
 
+bool is_r_uncolorable( lat_hypergraph_t &h )
+{
+    for ( auto &&perm : discreture::permutations( h.n ) )
+        if ( is_perm_colorable( h, perm ) ) return false;
+    return true;
+}
+
+using coloring_t = std::map< std::pair< int, int >, int >;
+
+coloring_t get_coloring_solution( const lat_hypergraph_t &h, int colors, sat_solver_t &solver )
+{
+    coloring_t coloring;
+    
+    int n = h.n;
+
+    const bimap< var_t, int > &translation = h.translation;
+
+    for ( auto &a : discreture::combinations( n, 2 ) )
+        for ( int c = 0; c < colors; c++ )
+            if ( solver.val( translation.left.at( arc_color( a[ 0 ], a[ 1 ], c ) ) ) > 0 )
+                coloring.insert( { { a[ 0 ], a[ 1 ] }, c } );
+
+    return std::move( coloring );
+}
+
+void print_graph( lat_hypergraph_t &h )
+{
+    std::cout << h.to_hypergraph() << std::endl;
+
+    sat_solver_t solver;
+    add_cnf( solver, h.blue_translated );
+
+    int res = solver.solve();
+
+    assert( res == SAT_Y );
+
+    int n = h.n;
+    
+    coloring_t coloring = get_coloring_solution( h, 7, solver );
+
+    //show( std::cout, h.blue_orig, true );
+
+    for ( const auto &[ key, item ] : coloring ) 
+    {
+        std::cout << key << "->" << item << std::endl;
+    }
+}
+
+bool is_b_uncolorable( lat_hypergraph_t &h )
+{
+    if ( h.counter_graph_entered % 10000 == 0 )
+    {
+        trace( "sts", h.counter_graph_entered, h.counter_blue_colorable );
+    }
+    h.counter_graph_entered++;
+
+    //trace( "edges", *h.edge_set );
+
+    sat_solver_t solver;
+    add_cnf( solver, h.blue_translated );
+    int res = solver.solve();
+    if ( res == SAT_U ) throw std::runtime_error( "sat does not know" );
+    
+    if ( res == SAT_Y )
+        h.counter_blue_colorable ++;
+
+    return res == SAT_N; 
+}
+
 int main( int arc, char** argv )
 {
+    int n = 7;
+
+    assert( cbx::choose( 5, 3 ) == 10 );
+    assert( cbx::choose( 7, 2 ) == 21 );
+
+    lat_hypergraph_t h( n );
+
+    cbx::trav_3hg_lat( h
+                     , is_b_uncolorable
+                     , is_r_uncolorable
+                     , print_graph );
+
+    trace( "count", "graphs visited", h.counter_graph_entered );
+    trace( "count", "graphs blue colorable", h.counter_blue_colorable );
+
 }
