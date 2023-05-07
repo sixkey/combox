@@ -16,6 +16,11 @@ struct hypergraph_t
     std::set< std::set< int > > edges;
 
     hypergraph_t( int n ) : n( n ) {}
+
+    hypergraph_t( int n, std::set< std::set< int > > edges ) 
+        : n( n )
+        , edges( std::move( edges ) )
+    {}
 };
 
 std::ostream& operator<<( std::ostream& os, const std::set< int > &e );
