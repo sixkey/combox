@@ -14,10 +14,6 @@
 #include "cbx_turan.hpp"
 #include "cbx_utils.hpp"
 
-std::string color_var( std::string graph_name, int i, int j )
-{
-    return graph_name + "_c_" + std::to_string( i ) + "," + std::to_string( j );
-}
 
 std::string edge_var( std::string graph_name, int i, int j, int k )
 {
@@ -70,6 +66,12 @@ struct graph
                 res.edges.insert( { x[ 0 ], x[ 1 ], x[ 2 ] } );
         return res;
     }
+
+    z3::expr_vector &vars()
+    {
+        return edges;
+    }
+
 };
 
 
@@ -86,22 +88,91 @@ std::ostream& operator<<( std::ostream &os
     return os << "}";
 }
 
+char const * const color_names[ 16 ] = 
+    { "c_0"
+    , "c_1"
+    , "c_2"
+    , "c_3"
+    , "c_4"
+    , "c_5"
+    , "c_6"
+    , "c_7"
+    , "c_8"
+    , "c_9"
+    , "c_10"
+    , "c_11"
+    , "c_12"
+    , "c_13"
+    , "c_14"
+    , "c_15" };
+
+struct enum_sort 
+{
+    int n;
+    std::string name;
+
+    z3::func_decl_vector enum_consts;
+    z3::func_decl_vector enum_testers;
+    z3::sort sort;
+
+    enum_sort( z3::context &c
+             , int n
+             , std::string name )
+             : n( n )
+             , name( name )
+             , enum_consts( c )
+             , enum_testers( c )
+             , sort( c.enumeration_sort( name.c_str()
+                                       , n
+                                       , color_names
+                                       , enum_consts
+                                       , enum_testers ) )
+    {
+        assert( n <= 16 );
+    }
+
+    z3::expr val( unsigned int i )
+    {
+        assert( i <= 16 );
+        return enum_consts[ i ]();
+    }
+
+    z3::expr mk_const( z3::context &c, const std::string &s )
+    {
+        return c.constant( s.c_str(), sort );
+    }
+};
+
 struct coloring
 {
 
     z3::expr_vector colors;
 
     std::map< std::pair< int, int >, int > color_indices;
-    std::shared_ptr< graph > g;
+    int n;
+    std::string name_;
 
-    coloring( z3::context &c, std::shared_ptr< graph > g ) : g( g ), colors( c )
+    enum_sort color_sort;
+
+    coloring( z3::context &c, int n, int no_colors, std::string name_ ) 
+        : n( n )
+        , colors( c )
+        , name_( name_ )
+        , color_sort( c, no_colors, name_ )
     {
         int counter = 0;
-        for ( auto &x : discreture::combinations( g->n, 2 ) ) {
+        for ( auto &x : discreture::combinations( n, 2 ) ) {
             color_indices.insert( { { x[ 0 ], x[ 1 ] }, counter } );
-            colors.push_back( c.int_const( color_var( g->name, x[ 0 ], x[ 1 ] ).c_str() ) );
+            colors.push_back(
+                color_sort.mk_const( c, color_var( x[ 0 ], x[ 1 ] ) )
+            );
             counter++;
         }
+    }
+
+    std::string color_var( int i, int j )
+    {
+        return name_ + "_c_" + std::to_string( i ) + "," + std::to_string( j );
     }
 
     z3::expr color( int i, int j )
@@ -110,29 +181,61 @@ struct coloring
         return colors[ color_indices.at( { i, j } ) ];
     }
 
-    z3::expr formula_palette( z3::context &c, cbx::palette_t &palette )
+    z3::expr respects_palette( z3::context &c
+                             , cbx::palette_t &palette )
     {
         z3::expr_vector triangle_colorings( c );
-        for ( auto &e : discreture::combinations( g->n, 3 ) )
+        for ( auto &e : discreture::combinations( n, 3 ) )
         {
             int i = e[ 0 ], j = e[ 1 ], k = e[ 2 ];
             z3::expr_vector triangle_coloring( c );
             for ( auto &p : palette )
-                triangle_coloring.push_back( ( color( i, j ) == p[ 0 ]
-                                            && color( j, k ) == p[ 1 ]
-                                            && color( i, k ) == p[ 2 ] ).simplify() );
+                triangle_coloring.push_back( 
+                    ( color( i, j ) == color_sort.val( p[ 0 ] )
+                   && color( j, k ) == color_sort.val( p[ 1 ] )
+                   && color( i, k ) == color_sort.val( p[ 2 ] ) ).simplify() );
             triangle_colorings.push_back( z3::mk_or( triangle_coloring ) );
         }
         return z3::mk_and( triangle_colorings );
     }
 
+    // TODO: There has to be a nicer decomposition.
+    z3::expr respects_palette( z3::context &c
+                             , graph &g 
+                             , cbx::palette_t &palette )
+
+    {
+        z3::expr_vector triangle_colorings( c );
+        for ( auto &e : discreture::combinations( n, 3 ) )
+        {
+            int i = e[ 0 ], j = e[ 1 ], k = e[ 2 ];
+            z3::expr_vector triangle_coloring( c );
+            for ( auto &p : palette )
+                triangle_coloring.push_back( 
+                    ( color( i, j ) == color_sort.val( p[ 0 ] )
+                   && color( j, k ) == color_sort.val( p[ 1 ] )
+                   && color( i, k ) == color_sort.val( p[ 2 ] ) ).simplify() );
+            triangle_colorings.push_back( 
+                z3::implies( g.edge( i, j, k )
+                           , z3::mk_or( triangle_coloring ) ) 
+            );
+        }
+        return z3::mk_and( triangle_colorings );
+
+    }
+
     std::map< std::pair< int, int >, int > read( const z3::model &m )
     {
         std::map< std::pair< int, int >, int > res;
-        for ( auto &a : discreture::combinations( g->n, 2 ) )
+        for ( auto &a : discreture::combinations( n, 2 ) )
             res.insert( { { a[ 0 ], a[ 1 ] }
                         , m.eval( color( a[ 0 ], a[ 1 ] ) ).get_numeral_int() } );
         return res;
+    }
+
+    z3::expr_vector &vars()
+    {
+        return colors;
     }
 };
 
@@ -235,6 +338,11 @@ struct permutation
                 }
         return res;
     }
+
+    z3::expr_vector &vars()
+    {
+        return links;
+    }
 };
 
 z3::expr mk_eq( z3::context &c, z3::expr a, z3::expr b )
@@ -244,35 +352,36 @@ z3::expr mk_eq( z3::context &c, z3::expr a, z3::expr b )
 
 struct graph_iso
 {
-    std::shared_ptr< graph > g, h;
+    int n;
     permutation p;
+    std::string name;
 
-    std::string name()
-    {
-        return g->name + "~=" + h->name;
-    }
+    graph_iso( z3::context &c, int n, std::string name )
+        : n( n ), name( name ), p( c, n, name + "_p" )
+    {}
 
-    graph_iso( z3::context &c
-             , std::shared_ptr< graph > g
-             , std::shared_ptr< graph > h ) : g( g ), h( h ), p( c, g->n, name() + "_p" )
+    z3::expr iso( z3::context &c
+                , graph &g 
+                , graph &h )
     {
-        assert( g->n == h->n );
-    }
-
-    z3::expr formula( z3::context &c )
-    {
+        assert( g.n == h.n );
         z3::expr_vector form( c );
 
-        for ( auto &x : discreture::combinations( g->n, 3 ) )
+        for ( auto &x : discreture::combinations( g.n, 3 ) )
         {
-            for ( auto &y : discreture::combinations( g->n, 3 ) )
+            for ( auto &y : discreture::combinations( g.n, 3 ) )
             {
                 auto atom = z3::implies( p.maps_to( c, x, y )
-                                       , ( g->edge( x ) == h->edge( y ) ) );
+                                       , ( g.edge( x ) == h.edge( y ) ) );
                 form.push_back( atom );
             }
         }
         return p.formula( c ) && z3::mk_and( form );
+    }
+
+    z3::expr_vector &vars()
+    {
+        return p.vars();
     }
 };
 
@@ -345,15 +454,17 @@ void test_iso()
     z3::context c;
     z3::solver s( c );
 
-    std::shared_ptr< graph > g = std::make_shared< graph >( c, 4, "g" );
-    std::shared_ptr< graph > h = std::make_shared< graph >( c, 4, "h" );
+    int n = 4;
 
-    auto f = graph_iso( c, g, h );
+    graph g( c, n, "g" );
+    graph h( c, n, "h" );
 
-    s.add( f.formula( c ) );
-    s.add( g->edge( 0, 1, 2 ) );
+    auto f = graph_iso( c, n, "phi" );
+
+    s.add( f.iso( c, g, h ) );
+    s.add( g.edge( 0, 1, 2 ) );
     s.add( f.p.maps_to( c, { 0, 1, 2 }, { 1, 2, 3 } ) );
-    s.add( ! h->edge( 1, 2, 3 ) );
+    s.add( ! h.edge( 1, 2, 3 ) );
 
     auto res = s.check();
     assert( ! res );
@@ -364,15 +475,14 @@ void test_coloring_5()
     z3::context c;
     z3::solver s( c );
 
-    std::shared_ptr< graph > g = std::make_shared< graph >( c, 5, "g" );
-    coloring col( c, g );
+    coloring col( c, 5, 2, "col" );
     cbx::palette_t palette = { { 0, 0, 1 }
                              , { 0, 1, 0 }
                              , { 0, 1, 1 }
                              , { 1, 0, 0 }
                              , { 1, 0, 1 }
                              , { 1, 1, 0 } };
-    s.add( col.formula_palette( c, palette ) );
+    s.add( col.respects_palette( c, palette ) );
 
     // This should be possible, because there is K_3-nonmonochromatic coloring
     // of K_5.
@@ -385,14 +495,14 @@ void test_coloring_6()
     z3::solver s( c );
 
     std::shared_ptr< graph > g = std::make_shared< graph >( c, 6, "g" );
-    coloring col( c, g );
+    coloring col( c, 6, 2, "col" );
     cbx::palette_t palette = { { 0, 0, 1 }
                              , { 0, 1, 0 }
                              , { 0, 1, 1 }
                              , { 1, 0, 0 }
                              , { 1, 0, 1 }
                              , { 1, 1, 0 } };
-    s.add( col.formula_palette( c, palette ) );
+    s.add( col.respects_palette( c, palette ) );
 
     // This should not be possible, because of Ramsey.
     assert( ! s.check() );
@@ -409,14 +519,14 @@ void tests()
     test_coloring_6();
 }
 
+
 int main( int arc, char** argv )
 {
-
     int n = std::stoi( argv[ 1 ] );
 
-    cbx::palette_t blue_palette = { { 1, 2, 3 }
-                                  , { 4, 1, 5 }
-                                  , { 6, 7, 1 } };
+    cbx::palette_t blue_palette = { { 0, 1, 2 }
+                                  , { 3, 0, 4 }
+                                  , { 5, 6, 0 } };
 
     // | a a b |
     // | b c c |
@@ -432,44 +542,34 @@ int main( int arc, char** argv )
     z3::context c;
     z3::solver s( c );
 
-    std::shared_ptr< graph > g = std::make_shared< graph >( c, n, "g" );
-    std::shared_ptr< graph > h = std::make_shared< graph >( c, n, "h" );
-
-    // g is blue colorable
-    coloring blue_coloring( c, g );
-
-
+    graph g( c, n, "g" );
+    graph h( c, n, "h" );
+    coloring blue_coloring( c, n, 7, "blue" );
+    coloring red_coloring( c, n, 3, "red" );
+    graph_iso f( c, n, "phi" );
 
     // There exists a g-coloring such that it respects blue palette.
     auto blue_formula =
         z3::exists(
-            blue_coloring.colors,
-            blue_coloring.formula_palette( c, blue_palette ) );
+            blue_coloring.vars(),
+            blue_coloring.respects_palette( c, g, blue_palette )
+        );
     s.add( blue_formula );
 
     // for all h, such that they are iso to f, there is no red coloring
 
     // g and h have to be iso
-    graph_iso f( c, g, h );
-    coloring red_coloring( c, h );
-
-    z3::expr_vector vars( c );
-    for ( auto c : f.p.links ) vars.push_back( c );
-    for ( auto c : h->edges ) vars.push_back( c );
-
 
     // For all h : hyper( n, 3 ) . h ~= g =>
     auto red_formula =
         z3::forall(
-            h->edges,
-            z3::implies(
-                z3::exists( f.p.links
-                          , f.formula( c ) ),
-                z3::forall(
-                    red_coloring.colors
-                    , ! red_coloring.formula_palette( c, red_palette )
-                )
-            )
+            h.vars()
+            , ( z3::forall( f.vars()
+                          , ! f.iso( c, g, h ) )
+             || z3::forall( red_coloring.vars()
+                          , ! red_coloring.respects_palette( c
+                                                           , h
+                                                           , red_palette ) ) )
         );
 
     //kck::trace( "perm", perm_formula );
@@ -479,11 +579,13 @@ int main( int arc, char** argv )
     bool sat = s.check();
     kck::trace( "sat", sat );
 
+    kck::trace( "stats", s.statistics() );
+
     if ( sat )
     {
         auto model = s.get_model();
-        kck::trace( "g", g->read( model ) );
-        kck::trace( "h", h->read( model ) );
+        kck::trace( "g", g.read( model ) );
+        kck::trace( "h", h.read( model ) );
     }
 
 }
