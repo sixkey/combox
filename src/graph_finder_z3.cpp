@@ -106,6 +106,27 @@ char const * const color_names[ 16 ] =
     , "c_14"
     , "c_15" };
 
+struct int_sort 
+{
+    int n; 
+
+    int_sort( z3::context &c
+             , int n
+             , std::string name ) : n( n ) 
+    {
+    }
+
+    z3::expr val( z3::context &c, int i )
+    {
+        return c.int_val( i );
+    }
+
+    z3::expr mk_const( z3::context &c, const std::string &s )
+    {
+        return c.int_const( s.c_str() );
+    }
+};
+
 struct enum_sort 
 {
     int n;
@@ -131,7 +152,7 @@ struct enum_sort
         assert( n <= 16 );
     }
 
-    z3::expr val( unsigned int i )
+    z3::expr val( z3::context &c, unsigned int i )
     {
         assert( i <= 16 );
         return enum_consts[ i ]();
@@ -143,6 +164,7 @@ struct enum_sort
     }
 };
 
+template < typename color_sort_t >
 struct coloring
 {
 
@@ -152,7 +174,7 @@ struct coloring
     int n;
     std::string name_;
 
-    enum_sort color_sort;
+    color_sort_t color_sort;
 
     coloring( z3::context &c, int n, int no_colors, std::string name_ ) 
         : n( n )
@@ -191,9 +213,9 @@ struct coloring
             z3::expr_vector triangle_coloring( c );
             for ( auto &p : palette )
                 triangle_coloring.push_back( 
-                    ( color( i, j ) == color_sort.val( p[ 0 ] )
-                   && color( j, k ) == color_sort.val( p[ 1 ] )
-                   && color( i, k ) == color_sort.val( p[ 2 ] ) ).simplify() );
+                    ( color( i, j ) == color_sort.val( c, p[ 0 ] )
+                   && color( j, k ) == color_sort.val( c, p[ 1 ] )
+                   && color( i, k ) == color_sort.val( c, p[ 2 ] ) ).simplify() );
             triangle_colorings.push_back( z3::mk_or( triangle_coloring ) );
         }
         return z3::mk_and( triangle_colorings );
@@ -212,9 +234,9 @@ struct coloring
             z3::expr_vector triangle_coloring( c );
             for ( auto &p : palette )
                 triangle_coloring.push_back( 
-                    ( color( i, j ) == color_sort.val( p[ 0 ] )
-                   && color( j, k ) == color_sort.val( p[ 1 ] )
-                   && color( i, k ) == color_sort.val( p[ 2 ] ) ).simplify() );
+                    ( color( i, j ) == color_sort.val( c, p[ 0 ] )
+                   && color( j, k ) == color_sort.val( c, p[ 1 ] )
+                   && color( i, k ) == color_sort.val( c, p[ 2 ] ) ).simplify() );
             triangle_colorings.push_back( 
                 z3::implies( g.edge( i, j, k )
                            , z3::mk_or( triangle_coloring ) ) 
@@ -475,7 +497,7 @@ void test_coloring_5()
     z3::context c;
     z3::solver s( c );
 
-    coloring col( c, 5, 2, "col" );
+    coloring< int_sort > col( c, 5, 2, "col" );
     cbx::palette_t palette = { { 0, 0, 1 }
                              , { 0, 1, 0 }
                              , { 0, 1, 1 }
@@ -495,7 +517,7 @@ void test_coloring_6()
     z3::solver s( c );
 
     std::shared_ptr< graph > g = std::make_shared< graph >( c, 6, "g" );
-    coloring col( c, 6, 2, "col" );
+    coloring< int_sort > col( c, 6, 2, "col" );
     cbx::palette_t palette = { { 0, 0, 1 }
                              , { 0, 1, 0 }
                              , { 0, 1, 1 }
@@ -522,6 +544,9 @@ void tests()
 
 int main( int arc, char** argv )
 {
+
+    tests();
+
     int n = std::stoi( argv[ 1 ] );
 
     cbx::palette_t blue_palette = { { 0, 1, 2 }
@@ -540,20 +565,20 @@ int main( int arc, char** argv )
                                  , { 1, 2, 2 } };
 
     z3::context c;
-    z3::solver s( c );
+    z3::solver s = ( z3::tactic( c, "simplify" )
+                   & z3::tactic( c, "dt2bv" )
+                   & z3::tactic( c, "bit-blast" )
+                   & z3::tactic( c, "qsat" ) ).mk_solver();
 
     graph g( c, n, "g" );
     graph h( c, n, "h" );
-    coloring blue_coloring( c, n, 7, "blue" );
-    coloring red_coloring( c, n, 3, "red" );
+    coloring< enum_sort > blue_coloring( c, n, 7, "blue" );
+    coloring< enum_sort > red_coloring( c, n, 3, "red" );
     graph_iso f( c, n, "phi" );
 
     // There exists a g-coloring such that it respects blue palette.
     auto blue_formula =
-        z3::exists(
-            blue_coloring.vars(),
-            blue_coloring.respects_palette( c, g, blue_palette )
-        );
+            blue_coloring.respects_palette( c, g, blue_palette );
     s.add( blue_formula );
 
     // for all h, such that they are iso to f, there is no red coloring
@@ -572,7 +597,7 @@ int main( int arc, char** argv )
                                                            , red_palette ) ) )
         );
 
-    //kck::trace( "perm", perm_formula );
+    kck::trace( "f_red", red_formula );
 
     s.add( red_formula );
 
