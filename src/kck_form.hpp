@@ -48,8 +48,8 @@ template < typename lit_t >
 struct formula
 {
     using var_t = typename lit_t::var_t;
+
     virtual lit_t to_cnf_go( cnf_builder< lit_t >& builder ) const = 0;
-    
     virtual std::ostream &to_string_go( std::ostream &ss, int level ) const = 0;
 
     cnf_t< lit_t > to_cnf( cnf_builder< lit_t > &builder )
@@ -93,7 +93,7 @@ std::ostream& str_indent( std::ostream& ss, int level );
 //// Not ////
 
 template < typename lit_t >
-struct node_not : public formula< lit_t > 
+struct node_not : formula< lit_t > 
 {
     using var_t = typename lit_t::var_t;
     formula_ptr< lit_t > child;
@@ -101,7 +101,7 @@ struct node_not : public formula< lit_t >
     node_not( formula_ptr< lit_t > child ) 
         : child( child ){};
 
-    lit_t to_cnf_go( cnf_builder< var_t >& builder ) const override 
+    lit_t to_cnf_go( cnf_builder< lit_t >& builder ) const override
     {
         lit_t node_lit = builder.get_help_lit();
         lit_t child_lit = child->to_cnf_go( builder );
@@ -110,7 +110,7 @@ struct node_not : public formula< lit_t >
         return node_lit;
     }
 
-    int to_string_go( std::ostream &ss, int level ) const override 
+    std::ostream &to_string_go( std::ostream &ss, int level ) const override
     {
         str_indent( ss, level * 2 ) << "not\n";
         return child->to_string_go( ss, level + 1 );
@@ -250,44 +250,50 @@ struct forms_t
     using and_t = node_and< lit_t >;
     using not_t = node_not< lit_t >;
     using nlit_t = node_literal< lit_t >;
+    using form_t = formula< lit_t >;
     using form_p = formula_ptr< lit_t >;
 
-    static formula_ptr< lit_t > f_lit( lit_t lit )
+    static form_p f_lit( lit_t lit )
     {
-        return std::make_shared< node_literal< lit_t > >( lit );
+        return std::make_shared< nlit_t >( lit );
     }
 
-    static formula_ptr< lit_t > f_and()
+    static form_p f_and()
     {
-        return std::make_shared< node_and< lit_t > >();
+        return std::make_shared< and_t >();
     }
 
-    static formula_ptr< lit_t > f_and( std::vector< formula_ptr< lit_t > > children )
+    static form_p f_and( std::vector< form_p > children )
     {
-        return std::make_shared< node_and< lit_t > >( children );
+        return std::make_shared< and_t >( children );
     }
 
-    static formula_ptr< lit_t > f_or()
+    static form_p f_or()
     {
-        return std::make_shared< node_or< lit_t > >();
+        return std::make_shared< and_t >();
     }
 
-    static formula_ptr< lit_t > f_or( std::vector< formula_ptr< lit_t > > children )
+    static form_p f_or( std::vector< form_p > children )
     {
-        return std::make_shared< node_or< lit_t > >( children );
+        return std::make_shared< or_t >( children );
     }
 
-    static formula_ptr< lit_t > f_imp( formula_ptr< lit_t > premise
-                                     , formula_ptr< lit_t > conclusion )
+    static form_p f_not( form_p var )
     {
-        std::vector< formula_ptr< lit_t > > elements;
-        elements.push_back( not( premise ) );
+        return std::make_shared< not_t >( var );
+    }
+
+    static form_p f_imp( form_p premise
+                       , form_p conclusion )
+    {
+        std::vector< form_p > elements;
+        elements.push_back( f_not( premise ) );
         elements.push_back( conclusion );
-        return std::make_shared< node_or< lit_t > >( elements );
+        return std::make_shared< or_t >( elements );
     }
 
-    static formula_ptr< lit_t > f_imp( std::vector< formula_ptr< lit_t > > premises
-                                        , formula_ptr< lit_t > conclusion )
+    static form_p f_imp( std::vector< form_p > premises
+                       , form_p conclusion )
     {
         std::vector< formula_ptr< lit_t > > elements;
         for ( auto &p : premises )

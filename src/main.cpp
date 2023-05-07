@@ -7,6 +7,7 @@
 
 #include "kck_str.hpp"
 #include <Discreture/Combinations.hpp>
+#include <Discreture/Permutations.hpp>
 #include <boost/dynamic_bitset/dynamic_bitset.hpp>
 #include <utility>
 #include <vector>
@@ -23,6 +24,7 @@
 #include "cbx_3unihg.hpp"
 #include "cbx_sim.hpp"
 #include "cbx_utils.hpp"
+#include "cbx_turan.hpp"
 
 #include "main.hpp"
 
@@ -76,8 +78,8 @@ var_t edge_present( int edge_index )
 //// Coloring formula /////////////////////////////////////////////////////////
 
 cnf_t< lit_t > cnf_triangle( const palette_t &palette
-                              , int i, int j, int k, int edge_index
-                              , cnf_builder< lit_t > &builder )
+                           , int i, int j, int k, int edge_index
+                           , cnf_builder< lit_t > &builder )
 {
     assert( i < j && j < k );
     forms::or_t triangle_cond;
@@ -92,10 +94,9 @@ cnf_t< lit_t > cnf_triangle( const palette_t &palette
     return triangle_cond.to_cnf( builder );
 }
 
-cnf_t< lit_t > cnf_triangles( const palette_t &palette, int n )
+cnf_t< lit_t > cnf_triangles( const palette_t &palette, int n, cnf_builder< lit_t > builder = cnf_builder< lit_t >( labeler ) )
 {
     cnf_t< lit_t > cnf;
-    cnf_builder< lit_t > builder( labeler );
 
     int edge_index = 0;
     for ( auto &&x : discreture::combinations( n, 3 ) )
@@ -131,12 +132,15 @@ cnf_t< lit_t > cnf_coloring( int n, int colors )
     return cnf;
 }
 
-cnf_t< lit_t > build_coloring_cnf( int n, int colors
-                                 , const palette_t &palette )
+cnf_t< lit_t > build_coloring_cnf( 
+    int n, 
+    int colors, 
+    const palette_t &palette, 
+    cnf_builder< lit_t > builder = cnf_builder< lit_t >( labeler ) )
 {
     cnf_t< lit_t > cnf;
     add_to( cnf, cnf_coloring( n, colors ) );
-    add_to( cnf, cnf_triangles( palette, n ) );
+    add_to( cnf, cnf_triangles( palette, n, builder ) );
     return cnf;
 }
 
@@ -145,12 +149,6 @@ cnf_t< lit_t > build_coloring_cnf( int n, int colors
 palette_t blue_palette = { { 1, 2, 3 }, { 4, 1, 5 }, { 6, 7, 1 } };
 
 //// Graph representation /////////////////////////////////////////////////////
-
-struct hypergraph_t
-{
-    int n;
-    std::set< std::set< int > > edges;
-};
 
 struct lat_hypergraph_t
 {
@@ -195,7 +193,7 @@ struct lat_hypergraph_t
         return blue_solver.solve();
     }
 
-    hypergraph_t to_hypergraph() const
+    cbx::hypergraph_t to_hypergraph() const
     {
         std::set< std::set< int > > edges;
         int counter = 0;
@@ -210,14 +208,6 @@ struct lat_hypergraph_t
     }
 
 };
-
-std::ostream& operator<<( std::ostream& os, const hypergraph_t& h )
-{
-    os << "Hypergraph[" << h.n << "] {";
-    for ( auto &e : h.edges )
-        str_indent( os, 2 ) << e << std::endl;
-    return os;
-}
 
 std::ostream& operator<<( std::ostream& os, const lat_hypergraph_t& h )
 {
@@ -340,18 +330,11 @@ void test_b()
     assert( is_b_uncolorable( h ) );
 }
 
-int main( int arc, char** argv )
+//// Lattice solution /////////////////////////////////////////////////////////
+
+void lattice_main( int n )
 {
-
-    test_b();
-
-    int n = std::stoi( argv[ 1 ] );
-
-    assert( cbx::choose( 5, 3 ) == 10 );
-    assert( cbx::choose( 7, 2 ) == 21 );
-
     lat_hypergraph_t h( n );
-
 
     cbx::trav_3hg_lat( h
                      , is_b_uncolorable
@@ -360,5 +343,134 @@ int main( int arc, char** argv )
 
     trace( "count", "graphs visited", h.counter_graph_entered );
     trace( "count", "graphs blue colorable", h.counter_blue_colorable );
+}
+
+//// SATting solution /////////////////////////////////////////////////////////
+
+var_t role_label( int p, int i, int j, int role )
+{
+    return { 'f', { p, i, j, role } };
+}
+
+forms::form_p red_uncolor_formula( int n )
+{
+
+    // Each ordering of the vertices needs one arc, which is uncolorable.
+    forms::and_t all_orderings_uncolorable;
+
+    int perm_index = 0;
+
+    for ( auto &&p : discreture::permutations( n ) )
+    {
+
+        // Go through the edges and label roles of the arcs.  
+        forms::and_t roles;
+
+        int edge_index = 0;
+
+        for ( auto &&c : discreture::combinations( n, 3 ) )
+        {
+            // edge_index represents the edge i, j, k 
+            // if edge with edge_index is on, ijk is in the graph
+            int pi = p[ c[ 0 ] ], pj = p[ c[ 1 ] ], pk = p[ c[ 2 ] ];
+
+            // This makes sure, we are adding the arcs in correct order 
+            // *with respect to the order of the permuted graph*. This 
+            // sorting is precisely the thing, which changes the order 
+            // of the graph. 
+            cbx::sort_i( pi, pj, pk );
+            assert( pi < pj && pj < pk );
+
+            roles.push( 
+                forms::f_imp( llit( edge_present( edge_index ), true )
+                            , forms::f_and( { llit( role_label( perm_index, pi, pj, 1 )
+                                                  , true )
+                                            , llit( role_label( perm_index, pj, pk, 2 )
+                                                  , true )
+                                            , llit( role_label( perm_index, pi, pk, 3 )
+                                                  , true ) } ) ) );
+            edge_index++;
+        }
+
+        // A problem happens, if at least one arcs has all three roles.
+        forms::or_t problem;
+        for ( auto &&c : discreture::combinations( n, 2 ) )
+        {
+            int i = c[ 0 ], j = c[ 1 ];
+            assert( i < j );
+            problem.push( forms::f_or( { llit( role_label( perm_index, i, j, 1 )
+                                             , true )
+                                       , llit( role_label( perm_index, i, j, 1 )
+                                             , true )
+                                       , llit( role_label( perm_index, i, j, 1 )
+                                             , true ) } ) );
+        }
+
+        all_orderings_uncolorable.push( roles );
+        all_orderings_uncolorable.push( problem );
+
+        perm_index++;
+    }
+
+    return std::make_shared< forms::and_t >( all_orderings_uncolorable );
+
+}
+
+cbx::hypergraph_t read_hypergraph( int n
+                            , sat_solver_t &solver
+                            , bimap< var_t, int > translation )
+{
+    int index = 0;
+    std::set< std::set< int > > edges;
+    for ( auto &c : discreture::combinations( n, 3 ) )
+    {
+        if ( solver.val( translation.left.at( edge_present( index ) ) ) > 0 ) 
+            edges.insert( { c[ 0 ], c[ 1 ], c[ 2 ] } );
+        index ++;
+    }
+    return { n, edges };
+}
+
+void satting_main( int n )
+{
+
+    cnf_builder< lit_t > builder( labeler );
+
+    cnf_t< lit_t > formula;
+
+    // Add existence of a blue coloring 
+    add_to( formula, build_coloring_cnf( n, 7, blue_palette, builder ) );
+
+    trace( "dbg", "blue formula done" );
+    // Add non-existence of a red coloring
+    add_to( formula, red_uncolor_formula( n )->to_cnf( builder ) );
+    trace( "dbg", "red formula done" );
+
+    auto [ translated, translation ] = to_int_cnf( formula );
+    trace( "dbg", "cnf done" );
+
+    trace( "cnf", cnf_get_stats( formula ) );
+    
+    sat_solver_t solver;
+    add_cnf( solver, translated );
+
+    int res = solver.solve();
+
+    if ( res == SAT_Y )
+        trace( "sol", read_hypergraph( n, solver, translation ) );
+    else if ( res == SAT_N ) 
+        trace( "sol", "no solution found" );
+    else 
+        trace( "sol", "unknown" );
+}
+
+//// Main /////////////////////////////////////////////////////////////////////
+
+int main( int arc, char** argv )
+{
+
+    int n = std::stoi( argv[ 1 ] );
+
+    satting_main( n );
 
 }

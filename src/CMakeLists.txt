@@ -6,18 +6,21 @@ add_library( kck
 
 add_library( cbx 
              cbx_utils.cpp
-             cbx_sim.cpp )
+             cbx_sim.cpp
+             cbx_3unihg.cpp )
+
+target_link_libraries( cbx kck )
 
 if(NOT TARGET spdlog)
     # Stand-alone build
     find_package(spdlog REQUIRED)
 endif()
 
-add_executable( graph_finder main.cpp )
+add_executable( graph_finder graph_finder_z3.cpp )
 target_link_directories( graph_finder PUBLIC ../lib )
 target_include_directories( graph_finder PRIVATE ../inc )
 target_link_libraries( graph_finder kck cbx )
-target_link_libraries( graph_finder cadical spdlog::spdlog )
+target_link_libraries( graph_finder cadical z3 spdlog::spdlog )
 
 Target_compile_options( graph_finder PUBLIC "${CXX_OPTIONS}" )
 target_compile_options( graph_finder PUBLIC "$<$<CONFIG:DEBUG>:${CXX_DEBUG_OPTIONS}>" )

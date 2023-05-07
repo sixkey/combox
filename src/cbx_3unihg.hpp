@@ -1,16 +1,32 @@
 #pragma once
 
+#include <set>
+
 #include "cbx_sim.hpp"
 #include "kck_log.hpp"
+#include "kck_str.hpp"
 
 namespace cbx {
 
+using hyperedge_t = std::tuple< int, int, int >;
+
+struct hypergraph_t
+{
+    int n;
+    std::set< std::set< int > > edges;
+
+    hypergraph_t( int n ) : n( n ) {}
+};
+
+std::ostream& operator<<( std::ostream& os, const std::set< int > &e );
+
+std::ostream& operator<<( std::ostream& os, const cbx::hypergraph_t& h );
+
 template < typename hg_t >
-using hg_pred = bool ( hg_t& );
+using hg_pred = bool ();
 
 template < typename hg_t >
 using hg_coll = void ( hg_t& );
-
 
 template < typename hg_t >
 void trav_3hg_lat_go( hg_t &h 

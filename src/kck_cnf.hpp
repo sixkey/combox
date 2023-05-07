@@ -298,4 +298,21 @@ struct cnf_stats
     size_t max_clause_size = 0;
 };
 
+template < typename lit_t >
+struct cnf_stats cnf_get_stats( const cnf_t< lit_t > &cnf )
+{
+    std::set< typename lit_t::var_t > variables;
+    int max_clause_size = 0;
+
+    for ( auto &clause : cnf ) 
+    {
+        for ( auto &literal : clause )
+            variables.insert( literal.var );
+        max_clause_size = std::max< int >( max_clause_size, clause.size() );
+    }
+    return { cnf.size(), variables.size(), max_clause_size };
+}
+
+std::ostream& operator <<( std::ostream& os, const cnf_stats& stats );
+
 }
