@@ -16,7 +16,7 @@ if(NOT TARGET spdlog)
     find_package(spdlog REQUIRED)
 endif()
 
-add_executable( graph_finder graph_finder_z3.cpp )
+add_executable( graph_finder main.cpp )
 target_link_directories( graph_finder PUBLIC ../lib )
 target_include_directories( graph_finder PRIVATE ../inc )
 target_link_libraries( graph_finder kck cbx )

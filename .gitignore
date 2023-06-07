@@ -1,4 +1,5 @@
 *
+
 !.gitignore
 
 !**.cpp
@@ -6,5 +7,6 @@
 
 !src
 !inc
+!app
 
 !**/CMakeLists.txt

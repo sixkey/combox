@@ -28,7 +28,7 @@ std::ostream& operator<<( std::ostream& os, const std::set< int > &e );
 std::ostream& operator<<( std::ostream& os, const cbx::hypergraph_t& h );
 
 template < typename hg_t >
-using hg_pred = bool ();
+using hg_pred = bool ( hg_t& );
 
 template < typename hg_t >
 using hg_coll = void ( hg_t& );
